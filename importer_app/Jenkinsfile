@@ -1,0 +1,115 @@
+pipeline{
+
+    agent any
+    environment{
+        AWS_ACCESS_KEY_ID=credentials('awsaccesskey')
+        AWS_SECRET_ACCESS_KEY=credentials('awssecretkey')
+        AWS_DEFAULT_REGION="us-east-1"
+        SKIP="N"
+        DESTROY="N"
+        FIRST_DEPLOY="Y"
+        REGISTRY_URL="<docker_registry_url>"
+        EKSCLUSTERNAME="<eks_cluster_name>"
+    }
+
+
+    stages{
+        stage("Run unit tests"){
+            when{
+                environment name:'DESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+            steps{
+                bat '''
+                cd data_scrape_api
+                pip install -r requirements.txt
+                pytest
+                '''
+            }
+        }
+
+        stage("Build Docker images"){
+            when{
+                environment name:'FIRST_DEPLOY',value:'Y'
+                environment name:'DESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+            parallel{
+                stage('build redis image'){
+                    steps{
+                        sh '''
+                        cd redis_custom
+                        docker login <image_registry_url> -u $IMAGE_CREDS_USR -p $IMAGE_CREDS_PSW
+                        docker build --no-cache -t $REGISTRY_URL/<image_name> .
+                        docker push $REGISTRY_URL/<image_name>
+                        '''
+                }
+                }
+                stage('build app image'){
+                    steps{
+                        sh '''
+                        docker login <image_registry_url> -u $IMAGE_CREDS_USR -p $IMAGE_CREDS_PSW
+                        docker build --no-cache -t $REGISTRY_URL/<image_name> .
+                        docker push $REGISTRY_URL/<image_name>
+                        '''
+                }
+                }
+
+            }
+            
+
+        }
+
+        stage("Deploy app"){
+            when{
+                environment name:'FIRST_DEPLOY',value:'Y'
+                environment name:'DESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+            stages{
+                stage('get kube creds'){
+                    steps{
+                            sh"""
+                            aws eks update-kubeconfig --name ${env.EKSCLUSTERNAME} 
+                            """
+                        }
+                }
+                stage('deploy app'){
+                    steps{
+                        sh '''
+                            cd kube_yamls
+                            kubectl apply -f configMaps.yml
+                            kubectl apply -f app.yml
+                            kubectl apply -f services.yml
+                            '''
+                    }
+                }
+            }
+
+        }
+
+        stage("Destroy app"){
+            when{                
+                environment name:'DESTROY',value:'Y'
+            }
+            steps{
+                sh '''
+                     cd kube_yamls
+                     kubectl delete -f app.yml
+                     kubectl delete -f configMaps.yml
+                     kubectl delete -f services.yml
+                     '''
+            }
+
+        }
+    }
+
+
+    post { 
+        always { 
+            cleanWs()
+        }
+    }
+
+
+}

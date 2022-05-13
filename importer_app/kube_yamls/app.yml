@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: appregistrykey
+  namespace: monitoring
+data:
+  .dockerconfigjson: <base64_encoded_credential_json>
+type: kubernetes.io/dockerconfigjson
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-importer-app
+  namespace: monitoring
+  labels:
+    app: importerapp
+    WorkerType: fargate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: importerapp
+  template:
+    metadata:
+      labels:
+        app: importerapp
+    spec:
+      imagePullSecrets:
+      - name: appregistrykey
+      containers:
+      - name: apiapp
+        image: <image>
+        imagePullPolicy: Always 
+        envFrom:
+        - configMapRef:
+            name: appenv
+        ports:
+        - containerPort: 5000
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-redis-db
+  namespace: monitoring
+  labels:
+    app: customredis
+    WorkerType: fargate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customredis
+  template:
+    metadata:
+      labels:
+        app: customredis
+    spec:
+      imagePullSecrets:
+      - name: appregistrykey
+      containers:
+      - name: apiapp
+        image: <image>
+        imagePullPolicy: Always 
+        ports:
+        - containerPort: 6379
+
+---
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kube-data-scrape-job
+  namespace: monitoring
+  labels:
+    WorkerType: fargate
+    app: scrapejob
+spec:
+  schedule: "0 */23 * * *"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          namespace: monitoring
+          labels:
+            WorkerType: fargate
+        spec:
+          imagePullSecrets:
+          - name: appregistrykey
+          containers:
+          - name: datascraper
+            image: <image>
+            imagePullPolicy: IfNotPresent
+            envFrom:
+            - configMapRef:
+                name: appenv
+          restartPolicy: OnFailure
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-network-policy
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: scrapejob
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443

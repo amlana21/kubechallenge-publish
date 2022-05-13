@@ -1,0 +1,240 @@
+pipeline{
+
+    agent any
+    environment{
+        AWS_ACCESS_KEY_ID=credentials('awsaccesskey')
+        AWS_SECRET_ACCESS_KEY=credentials('awssecretkey')
+        AWS_DEFAULT_REGION="us-east-1"
+        SKIP="N"
+        TERRADESTROY="N"
+        FIRST_DEPLOY="Y"
+        STATE_BUCKET="<state_bucket_name>"
+        CLUSTER_NAME="<cluster_name>"
+    }
+
+
+
+    stages{
+
+        stage("Create Terraform State Buckets"){
+            when{
+                environment name:'FIRST_DEPLOY',value:'Y'
+                environment name:'TERRADESTROY',value:'N'
+            }
+            steps{
+                script {
+                    sh(returnStdout: true, script: "aws s3 mb s3://'${env.STATE_BUCKET}'").trim()
+                    
+                }
+                
+            }
+        }
+
+
+        stage("Deploy Kube cluster"){
+            when{
+                environment name:'FIRST_DEPLOY',value:'Y'
+                environment name:'TERRADESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+            stages{
+                        stage('Validate infra'){
+                            steps{
+                                sh '''
+                                cd eks_cluster
+                                terraform init
+                                terraform validate'''
+                            }
+                        }
+                        stage('Deploy cluster'){
+                             
+                            steps{
+                                sh '''
+                                cd eks_cluster
+                                terraform plan -out outfile
+                                terraform apply outfile'''
+                                sleep 20
+                            }
+                        }
+                        stage('test kubectl'){
+                            steps{
+                                script {
+                                    sh """
+                                    cd eks_cluster
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    kubectl get nodes
+                                    """
+
+                                }
+                            }
+                        }
+                    }
+        }
+
+        stage("Deploy prometheus"){
+
+            when{
+                environment name:'FIRST_DEPLOY',value:'Y'
+                environment name:'TERRADESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+
+            stages{
+                        stage('create namespace'){
+                            steps{
+                                script {
+                                    sh """
+                                    cd helm_prometheus
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    kubectl apply -f namespace.yml
+                                    """
+
+                                }
+                            }
+                        }
+                        stage('install prometheus stack'){
+                            steps{
+                                script {
+                                    sh """
+                                    cd helm_prometheus
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 
+                                    helm repo add stable https://charts.helm.sh/stable
+                                    helm repo update
+                                    helm install prometheus -f values.yml -n monitoring prometheus-community/kube-prometheus-stack --version 32.2.1
+                                    """
+
+                                }
+                            }
+                        }
+
+                        stage('create expose service'){
+                            steps{
+                                script {
+                                    sh """
+                                    cd helm_prometheus
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    kubectl apply -f services.yml
+                                    """
+
+                                }
+                            }
+                        }
+                        stage('get lb endpoint'){
+                            when{
+                                environment name:'SKIP',value:'N'
+                            }
+                            steps{
+                                script {
+                                    sh """
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME}
+                                    
+                                    """
+                                    env.lbendp=sh(label:'',script:"kubectl describe svc grafana-endpoint-svc-elb -n monitoring | grep -i 'LoadBalancer Ingress:'",returnStdout: true).trim()
+                                    
+
+                                }
+                                slackSend botUser: true, channel: 'jenkinsalerts', message: "Grafana URL with $lbendp", tokenCredentialId: 'slack-token'
+                                
+                            }
+                        }
+
+            }
+
+
+
+        }
+
+        stage("Upgrade prometheus"){
+            when{
+                environment name:'FIRST_DEPLOY',value:'N'
+                environment name:'TERRADESTROY',value:'N'
+                environment name:'SKIP',value:'N'
+            }
+            stages{
+                stage('upgrade prometheus stack'){
+                    when{
+                    environment name:'SKIP',value:'Y'
+                    }
+                            steps{
+                                script {
+                                    sh """
+                                    cd helm_prometheus
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    helm upgrade -f values.yml  -n monitoring prometheus prometheus-community/kube-prometheus-stack  --version 32.2.1
+                                    """
+
+                                }
+                            }
+                        }
+                stage('update expose service'){
+                    when{
+                        environment name:'SKIP',value:'Y'
+                    }
+                            steps{
+                                script {
+                                    sh """
+                                    cd helm_prometheus
+                                    aws eks update-kubeconfig --name ${env.CLUSTER_NAME} 
+                                    kubectl replace -f services.yml --force
+                                    """
+
+                                }
+                            }
+                }
+
+                
+            }
+
+        }
+
+
+
+
+        stage("Run Destroy"){
+
+            when{
+                environment name:'TERRADESTROY',value:'Y'
+            }
+            stages{
+
+                stage("Destroy eks cluster"){
+                    when{
+                        environment name:'SKIP',value:'N'
+                    }
+                    steps{
+                        sh '''
+                            cd eks_cluster
+                            terraform init
+                            terraform destroy -auto-approve
+                            '''
+                    }
+                }
+
+                stage("Destroy state bucket"){
+                    steps{
+                        slackSend botUser: true, channel: 'jenkinsalerts', message: 'Destroyed Cluster..', tokenCredentialId: 'slack-token'
+                         script {
+                            sh(returnStdout: true, script: "aws s3 rb s3://'${env.STATE_BUCKET}' --force").trim()                    
+                        }
+                    }
+                }
+
+                //next steps
+
+
+            }
+
+        }
+
+
+    }
+
+
+
+    post { 
+        always { 
+            cleanWs()
+        }
+    }
+}

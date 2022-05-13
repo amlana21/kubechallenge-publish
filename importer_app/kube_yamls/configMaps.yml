@@ -1,0 +1,13 @@
+apiVersion: v1
+data:
+  STOCK_URL: 'https://www.alphavantage.co/query'
+  API_KEY: 
+  API_ENV: 'PROD'
+  REDIS_URL: '<redis_cluster_ip'
+  REDIS_PORT: '80'
+  REDIS_PASSWORD: 'password'
+  API_URL: '<importer_api_cluster_ip>'
+kind: ConfigMap
+metadata:
+  name: appenv
+  namespace: monitoring

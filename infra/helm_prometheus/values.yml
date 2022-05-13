@@ -1,0 +1,12 @@
+commonLabels:
+  WorkerType: fargate
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+    - job_name: Data_Metric_job
+      scrape_interval: 1d
+      static_configs:
+      - targets: ['<importer_api_cluster_ip>']
+      metrics_path: /exchangemetrics
+grafana:
+  adminPassword: anypassword

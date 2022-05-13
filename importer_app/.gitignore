@@ -1,0 +1,6 @@
+appenv/
+.idea/
+__pycache__
+.env
+.venv
+appenv1/

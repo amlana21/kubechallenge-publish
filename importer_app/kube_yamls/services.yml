@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: importerapplb
+  namespace: monitoring
+spec:
+  selector:
+    app: importerapp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: LoadBalancer
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: importerappcluster
+  namespace: monitoring
+spec:
+  selector:
+    app: importerapp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: customredislb
+  namespace: monitoring
+spec:
+  selector:
+    app: customredis
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 6379
+  type: LoadBalancer
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: customrediscluster
+  namespace: monitoring
+spec:
+  selector:
+    app: customredis
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 6379
